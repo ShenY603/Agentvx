@@ -70,7 +70,17 @@
 | 业务日志/排重 | `psycopg[binary]` | 直接读写 `messages` / `request_log` 表（与 PostgresSaver 同用 psycopg，少一个依赖） |
 | 配置 | `pydantic-settings` + `python-dotenv` | 读环境变量 / `.env` |
 | 包管理 | `uv` 或 `pip` + `requirements.txt` | 依赖锁定 |
+| 代码风格 | `ruff` | 统一格式化（`ruff format`）+ 静态检查（`ruff check`），PEP 8 |
 | 部署 | Docker Compose | 两容器：`postgres` + `app`，内部网络 |
+
+## 编码约定（本项目统一遵循）
+
+- 所有 Python 代码写在项目目录下（`app/`、`tests/`、`sql/`）。
+- 分文件编写：入口 / 配置 / 接入 / 编排 / 状态 / 模型 / DB 各一文件。
+- 模块解耦：`bot.py`（接入）与 `graph.py`（编排）通过函数/异步调用衔接，不互相侵入内部实现。
+- 文件名全小写。
+- 格式统一：**ruff**（`ruff format` + `ruff check`），PEP 8。
+- 分阶段推进，每阶段附验证步骤；完成一阶段后在「实施阶段」勾选对应 `- [x]`。
 
 ## 目录结构
 
@@ -198,23 +208,30 @@ volumes:
 
 > 说明：现有独立 PG 容器里的 `mydb` 基本是空库，可改为由 compose 统一管理（更干净）。若想复用现有容器，则去掉 compose 里的 postgres 服务，把 `DATABASE_URL` 的 host 指向宿主机地址即可。
 
-## 实施阶段（建议顺序）
+## 实施阶段（按阶段推进，完成后勾选 `[x]`）
 
-1. **Phase 0 前置**：确认企业微信账号可创建智能机器人（认证）；拿到 Bot ID/Secret；拿到 DeepSeek API Key。
-2. **Phase 1 数据库**：写 `sql/init.sql`，在 PG 中建表。
-3. **Phase 2 LangGraph 应用**：先脱离企微，写 `graph.py` + `tests/test_graph.py`，用 `graph.ainvoke` 直接单测「调 DeepSeek + 写 PG + checkpoint 持久化」。
-4. **Phase 3 企微接入**：接 `wecom-aibot-python-sdk`，本地连上长连接，把消息转发到 graph。
-5. **Phase 4 容器化**：写 Dockerfile（`python:3.12-slim`）+ docker-compose 一键起。
-6. **Phase 5 端到端联调**：企微里 @机器人 提问，观察回答 + PG 记录 + 日志。
+> 约定：每阶段 = 实现 + 可执行的验证。完成一阶段后，把该项 `- [ ]` 改为 `- [x]`；所有代码提交前跑 `ruff format` + `ruff check` 保证风格统一。
 
-## 验证
+- [ ] **Phase 0 前置（用户操作）**
+  - 做：确认企微账号可创建智能机器人（认证）；拿到 Bot ID/Secret；拿到 DeepSeek API Key。
+  - 验证：三个凭证齐全，`app/.env.example` 对应字段可填。
 
-- **Graph 单测**（无需企微）：
-  ```bash
-  python -m pytest tests/test_graph.py
-  ```
-  预期：`graph.ainvoke` 返回 `answer`，且 `messages` 表新增 2 条记录（user + assistant），checkpoint 表有对应 thread 状态。
-- **多轮验证**：同一 `thread_id` 连续问两次，第二次能引用第一次上下文（验证 checkpointer 生效）。
-- **Python 接入单测**：启动后日志显示长连接鉴权成功；本地模拟发一条消息事件，确认能转发到 graph 并拿到回答。
-- **全链路**：企微群/单聊 @机器人 提问 → 收到正确回答；`messages` 表有完整对话记录；重复消息（同 msgid）不重复入库。
-- **健康检查**：`docker compose ps` 两服务均 running；app 进程存活且 PG 连通（可选加极简 `/health` 端点用于 Docker healthcheck）。
+- [ ] **Phase 1 数据库**
+  - 做：写 `sql/init.sql`（`messages` + `request_log`），在 PG 建表。
+  - 验证：执行后 `\dt` 能看到两张表；`\d messages` 字段符合设计。
+
+- [ ] **Phase 2 LangGraph 应用**
+  - 做：`state.py` / `llm.py` / `db.py` / `graph.py` + `tests/test_graph.py`。
+  - 验证：`python -m pytest tests/test_graph.py` 通过；`graph.ainvoke` 返回 answer，`messages` 表新增 user+assistant 两条，checkpoint 表有对应 thread 状态；同一 thread 连问两次能引用上文。
+
+- [ ] **Phase 3 企微接入**
+  - 做：`config.py` / `bot.py`，接 `wecom-aibot-python-sdk` 长连接，转发到 graph。
+  - 验证：启动后日志显示长连接鉴权成功；本地模拟一条消息事件，确认转发到 graph 并拿到回答。
+
+- [ ] **Phase 4 容器化**
+  - 做：Dockerfile（`python:3.12-slim`）+ `docker-compose.yml`（postgres + app）。
+  - 验证：`docker compose up -d` 后 `docker compose ps` 两服务 running；`docker compose logs app` 无报错；进程存活且 PG 连通。
+
+- [ ] **Phase 5 端到端联调**
+  - 做：企微里 @机器人 提问，全链路打通。
+  - 验证：收到正确回答；`messages` 表有完整对话记录；重复消息（同 msgid）不重复入库。
