@@ -1,21 +1,28 @@
 # 生活助手（企业微信智能机器人）实施方案
 
+> v2：全 Python + LangGraph（原 v1 的 C++ 业务服务已移除，核心编排统一到 Python 生态）
+
 ## Context（背景）
 
-用户想做一个「生活助手」：接入企业微信，用户 @机器人 提问生活问题，系统给出合理正确的回答。技术栈明确要求 **C++ + Python**，数据库用**云服务器 Docker 容器里的 PostgreSQL**（已就绪）。
+用户想做一个「生活助手」：接入企业微信，用户 @机器人 提问生活问题，系统给出合理正确的回答。技术栈定为 **纯 Python**，数据库用**云服务器 Docker 容器里的 PostgreSQL**（已就绪）。
 
 已确认的关键决策：
 
-- **回答引擎**：DeepSeek API（OpenAI 兼容接口）
+- **回答引擎**：DeepSeek API（OpenAI 兼容接口），经 `langchain-deepseek` 接入
+- **编排框架**：LangGraph（有状态 agent 工作流，checkpoint 持久化、流式）
 - **企微接入**：企业微信「智能机器人」→ API 接入 → **WebSocket 长连接模式**（官方推荐，无需备案域名/HTTPS）
-- **PG 用途**：只存对话历史 + 日志（v1 不做 RAG/向量检索）
+- **PG 用途**：对话历史 + 日志 + LangGraph 状态（v1 不做 RAG/向量检索，但预留扩展位）
 - **服务器**：腾讯云 Ubuntu（主机名 `VM-0-8-ubuntu`），已装 Docker 29.8 + PostgreSQL 17 容器（`postgres`，映射 `127.0.0.1:5432`）
 
 ## 可行性结论
 
-**完全可行。** 唯一的技术难点是企微智能机器人的 WebSocket 长连接协议——官方只提供 Node.js 和 Python SDK（[aibot-node-sdk](https://github.com/WecomTeam/aibot-node-sdk)、[wecom-aibot-python-sdk](https://pypi.org/project/wecom-aibot-python-sdk/)），**没有 C++ SDK**。若在 C++ 里手写这套协议（鉴权握手、心跳、事件帧解析、回复帧）成本很高且易错。
+**完全可行。** 相较原 C++ + Python 方案，本方案更简单、出错面更小：
 
-因此采用下面的分工，让两种语言各用在最合适的地方。
+- 企微 WebSocket 长连接仍由官方 SDK（`wecom-aibot-python-sdk`）负责，无需手写私有协议。
+- DeepSeek 是 OpenAI 兼容接口，LangChain 原生支持，无需自己拼 HTTP/JSON。
+- 对话历史、状态持久化、流式输出都有现成组件，无需手写 `libpqxx` 这类胶水。
+
+唯一不变的技术难点依旧是企微 WebSocket 长连接协议——但该协议由官方 SDK 屏蔽，业务侧只需关心「收到消息 → 交给 LangGraph → 回复」。
 
 ## 架构总览
 
@@ -23,49 +30,47 @@
 企微用户 @机器人 提问
         │  (WebSocket 长连接，wss://openws.work.weixin.qq.com)
         ▼
-┌─ Python 接入服务 ─────────────────────────────┐
-│  wecom-aibot-python-sdk 维持长连接、收发消息      │
-│  收到问题 → HTTP POST 转发给 C++ 服务             │
-└───────────────────┬──────────────────────────┘
-                    │  POST http://127.0.0.1:8080/ask  {"question": "...", "userid": "...", "chatid": "..."}
-                    ▼
-┌─ C++ 业务服务 ────────────────────────────────┐
-│  cpp-httplib HTTP 服务（端口 8080）             │
-│  1) 解析问题                                     │
-│  2) 调用 DeepSeek API 生成回答（cpp-httplib 客户端）│
-│  3) 写 PostgreSQL（libpqxx）                     │
-│  4) 返回 {"answer": "..."}                       │
-└───────────────────┬──────────────────────────┘
-                    │  返回回答
-                    ▼
-┌─ Python 接入服务 ─────────────────────────────┐
-│  通过 SDK 回复企微（文本回复，可后续加流式）         │
-└──────────────────────────────────────────────┘
-        │
-        ▼
-   用户在企微看到回答
+┌─ Python 服务（单进程 asyncio，一个容器）─────────────────────┐
+│                                                              │
+│  bot.py —— wecom-aibot-python-sdk 维持长连接                    │
+│    · 收消息：仅处理 text，群聊先判断是否 @机器人                    │
+│    · msgid 幂等排重（查 messages 表）                            │
+│    · 把问题交给 LangGraph，取回答案（可流式）                      │
+│                                                              │
+│  graph.py —— LangGraph 编排                                    │
+│    · State：messages(历史+当前) + 元数据                         │
+│    · generate 节点 → DeepSeek 生成（langchain-deepseek）          │
+│    · checkpointer = PostgresSaver（thread_id = chatid/userid）    │
+│                                                              │
+│  db.py —— psycopg 读写 messages / request_log                   │
+└──────────────────────────────┬───────────────────────────────┘
+                               ▼
+                        PostgreSQL 容器
+        （messages 对话日志 + request_log 统计 + LangGraph checkpoint 状态）
 ```
 
-## C++ / Python 分工（及理由）
+单进程单容器即可跑通全链路；`bot.py`（接入）与 `graph.py`（业务）通过普通函数/异步调用衔接，若日后要拆成两个服务也很自然。
 
-| 语言 | 职责 | 理由 |
-|------|------|------|
-| **Python** | 企微 WebSocket 长连接接入（收发消息、回复） | 有官方 SDK，免去手写私有协议；异步/流式生态成熟 |
-| **C++** | 核心业务服务：调 DeepSeek、读写 PG、排重/日志 | C++ 擅长高性能后端；体现「用 C++ 做核心逻辑」 |
+## 为什么「全 Python + LangGraph」
 
-两服务通过**本机 HTTP**（`127.0.0.1:8080`）通信，简单、易调试。
+| 决策 | 理由 |
+|------|------|
+| 放弃 C++ | LangChain/LangGraph 是 Python 生态，编排逻辑天然落在 Python；C++ 只会退化成 HTTP 转发壳，无保留价值 |
+| 用 LangGraph 而非裸调 DeepSeek | 用**状态机**组织流程：多轮记忆（checkpoint 自动带上文）、流式输出、后续可无痛加 RAG / 工具调用 / 意图路由分支 |
+| checkpointer 用 PG 持久化 | 状态落库、进程重启不丢上下文、天然支持「按会话 id 隔离」 |
 
 ## 技术选型
 
 | 组件 | 选型 | 说明 |
 |------|------|------|
-| C++ HTTP 服务/客户端 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 单头文件，需 OpenSSL（调 DeepSeek 的 HTTPS） |
-| C++ JSON | [nlohmann/json](https://github.com/nlohmann/json) | 单头文件 |
-| C++ 访问 PG | [libpqxx](https://github.com/jtv/libpqxx) | 官方 libpq 的现代 C++ 封装 |
-| Python 企微接入 | `wecom-aibot-python-sdk` | 官方 Python SDK，asyncio 长连接 |
-| Python HTTP 客户端 | `httpx` / `aiohttp` | SDK 异步环境下转发请求 |
-| 构建 | CMake | 跨 Windows(MSYS2) 与 Ubuntu 一致 |
-| 部署 | Docker Compose | 三容器：postgres + cpp + python，内部网络 |
+| 企微接入 | `wecom-aibot-python-sdk` | 官方 Python SDK，asyncio 长连接 |
+| LLM 编排 | `langgraph` | 有状态 agent 工作流，支持流式与 checkpoint |
+| LLM 模型 | `langchain-deepseek`（`ChatDeepSeek`） | DeepSeek 官方 LangChain 集成，`model="deepseek-chat"`；也可用 `langchain-openai` 的 `ChatOpenAI(base_url=…)` |
+| 状态持久化 | `langgraph-checkpoint-postgres`（`PostgresSaver`） | LangGraph 状态/多轮记忆存 PG，`thread_id=会话` |
+| 业务日志/排重 | `psycopg[binary]` | 直接读写 `messages` / `request_log` 表（与 PostgresSaver 同用 psycopg，少一个依赖） |
+| 配置 | `pydantic-settings` + `python-dotenv` | 读环境变量 / `.env` |
+| 包管理 | `uv` 或 `pip` + `requirements.txt` | 依赖锁定 |
+| 部署 | Docker Compose | 两容器：`postgres` + `app`，内部网络 |
 
 ## 目录结构
 
@@ -74,22 +79,19 @@ life-assistant/
 ├── docker-compose.yml
 ├── README.md
 ├── sql/
-│   └── init.sql                # 建表语句
-├── cpp/                        # C++ 业务服务
-│   ├── CMakeLists.txt
-│   ├── third_party/
-│   │   ├── httplib.h
-│   │   └── json.hpp
-│   └── src/
-│       ├── main.cpp            # HTTP 服务入口，路由 /ask、/health
-│       ├── config.h/.cpp       # 读环境变量（DEEPSEEK_API_KEY、DATABASE_URL、PORT）
-│       ├── llm.h/.cpp          # 调 DeepSeek /chat/completions
-│       ├── db.h/.cpp           # libpqxx 读写 PG
-│       └── log.h               # 简单日志
-└── python/                     # 企微接入服务
-    ├── main.py                 # 长连接 + 消息处理 + 转发 C++ + 回复
-    ├── requirements.txt
-    └── .env.example
+│   └── init.sql                # 建表：messages + request_log
+├── app/
+│   ├── requirements.txt        # 或 pyproject.toml
+│   ├── .env.example
+│   ├── main.py                 # 入口：起企微长连接，装配 graph
+│   ├── config.py               # 读环境变量（BOT_ID/BOT_SECRET/DEEPSEEK_API_KEY/DATABASE_URL）
+│   ├── bot.py                  # wecom-aibot-python-sdk 封装：收消息、@过滤、排重、回复/流式
+│   ├── graph.py                # LangGraph 图定义（State、generate 节点、checkpointer）
+│   ├── state.py                # GraphState 类型定义（TypedDict）
+│   ├── llm.py                  # 构造 ChatDeepSeek
+│   └── db.py                   # psycopg 连接池 + 排重 + 日志读写
+└── tests/
+    └── test_graph.py           # 脱离企微，直接 ainvoke 单测 graph
 ```
 
 ## 组件详细设计
@@ -114,52 +116,41 @@ CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
 
 CREATE TABLE IF NOT EXISTS request_log (
     id         BIGSERIAL PRIMARY KEY,
-    path       TEXT,
-    status     INT,
+    chatid     TEXT,
+    status     TEXT,                     -- 'ok' / 'error' / 'timeout'
     latency_ms INT,
     detail     TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
-### 2. C++ 业务服务（核心）
+> LangGraph 的 checkpoint 表（`checkpoints` / `checkpoint_blobs` / `checkpoint_writes`）由 `PostgresSaver` 首次启动时自动建，不必手写。`messages` 表独立保留，用于**幂等排重**与**可读审计日志**（checkpoint 表是框架内部格式，不便直接查询）。
 
-- 依赖：`cpp-httplib`、`nlohmann/json`、`libpqxx`、OpenSSL。
-- 环境变量（部署时注入）：
-  - `DEEPSEEK_API_KEY`（必填）
-  - `DATABASE_URL`，如 `postgresql://postgres:密码@postgres:5432/mydb`
-  - `PORT`（默认 8080）
-- 路由：
-  - `GET /health` → 返回 `{"status":"ok"}`（容器健康检查）
-  - `POST /ask` → 入参 `{"question","userid","chatid","chattype","msgid"}`；内部流程：
-    1. 若 `msgid` 已存在于 `messages` 表则直接返回已有回答（幂等排重）
-    2. 插入一条 `role='user'` 记录
-    3. 调 DeepSeek 生成回答（见下）
-    4. 插入 `role='assistant'` 记录 + 写 `request_log`
-    5. 返回 `{"answer": "...", "errmsg": "ok"}`
-- **DeepSeek 调用**（`llm.cpp`）：POST `https://api.deepseek.com/chat/completions`，Header `Authorization: Bearer <key>`，body：
-  ```json
-  {
-    "model": "deepseek-chat",
-    "messages": [
-      {"role": "system", "content": "你是一个生活助手，用简洁准确的中文回答日常生活问题。"},
-      {"role": "user", "content": "<question>"}
-    ],
-    "stream": false
-  }
-  ```
-  取 `choices[0].message.content`。超时建议 60s。
+### 2. LangGraph 应用（核心，`graph.py` / `state.py`）
 
-### 3. Python 接入服务（企微长连接）
+- **State（`GraphState`）**：基于 LangGraph 内置的 `MessagesState`（含 `messages: list[BaseMessage]`），追加业务元数据 `userid / chatid / chattype / msgid`。
+- **节点**：
+  - `generate`：取 `messages`（checkpoint 已带上文 + 本次用户问题），组装 system 提示词，调 `ChatDeepSeek`，把结果作为 `AIMessage` 追加。
+- **边**：`START → generate → END`。v1 单节点足够简单；用 LangGraph 的价值在于后续可无痛插入 `retrieve`（RAG）、`tools`（工具调用）、`route`（意图路由）等节点与条件分支。
+- **checkpointer**：`PostgresSaver`，`thread_id = chatid or userid`（群聊按群、单聊按人隔离多轮上下文）。
 
-- 依赖：`wecom-aibot-python-sdk`、`httpx`。
-- 配置：`BOT_ID`、`BOT_SECRET`（企微后台创建智能机器人后获得）、`CPP_SERVICE_URL=http://127.0.0.1:8080`。
+### 3. DeepSeek 调用（`llm.py`）
+
+- `ChatDeepSeek(model="deepseek-chat", api_key=..., temperature=...)`，需 `DEEPSEEK_API_KEY`。
+- system 提示词示例：「你是一个生活助手，用简洁准确的中文回答日常生活问题。」
+- 超时建议 60s；后续需要更强推理可换 `deepseek-reasoner`。
+
+### 4. 企微接入（`bot.py`）
+
+- 依赖：`wecom-aibot-python-sdk`。
+- 配置：`BOT_ID`、`BOT_SECRET`（企微后台创建智能机器人后获得）。
 - 流程：
   1. 用 SDK 建立到 `wss://openws.work.weixin.qq.com` 的长连接并鉴权（Bot ID + Secret）。
-  2. 收到消息事件：仅处理 `msgtype == "text"`，取 `text.content`（群聊中建议先判断是否 @了机器人）。
-  3. `httpx` POST 到 C++ `/ask`，带上 userid/chatid/msgid。
-  4. 拿到 `answer`，用 SDK 的回复接口发回企微（v1 用普通文本回复；后续可换流式，官方文档 [流式消息回复](https://developer.work.weixin.qq.com/document/path/101031)）。
-- 异常处理：C++ 超时/失败时回复用户一条固定兜底文案（如「抱歉，暂时没想好怎么回答～」）。
+  2. 收到消息事件：仅处理 `msgtype == "text"`，取 `text.content`；群聊中先判断是否 @了机器人。
+  3. **排重**：查 `messages` 表是否有该 `msgid`；有则复用已有回答（幂等，防重试/重投重复处理）。
+  4. 写 `role='user'` 记录 → 调 `graph.ainvoke`（或 `astream`）→ 写 `role='assistant'` 记录 + `request_log`。
+  5. 用 SDK 回复企微。v1 用普通文本回复；流式切换成本低：`graph.astream(stream_mode="messages")` 逐 token 下发到企微流式接口。
+- 异常处理：DeepSeek 超时/失败时回复固定兜底文案（如「抱歉，暂时没想好怎么回答～」），并写 `request_log.status='error'`。
 
 ## 企微接入步骤（前置条件，需用户操作）
 
@@ -171,12 +162,11 @@ CREATE TABLE IF NOT EXISTS request_log (
    - 接收消息：https://developer.work.weixin.qq.com/document/path/100719
    - 流式消息回复：https://developer.work.weixin.qq.com/document/path/101031
    - Python SDK：https://pypi.org/project/wecom-aibot-python-sdk/
-   - Node SDK（协议参考）：https://github.com/WecomTeam/aibot-node-sdk
 5. DeepSeek 开放平台注册并创建 API Key（https://platform.deepseek.com ）。
 
 ## 部署（docker-compose.yml）
 
-三服务同处一个内部网络，PG 不暴露公网：
+两服务同处一个内部网络，PG 不暴露公网：
 
 ```yaml
 services:
@@ -192,22 +182,14 @@ services:
     restart: unless-stopped
     # 不映射端口到宿主机，仅内部网络可访问
 
-  cpp:
-    build: ./cpp
-    environment:
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DATABASE_URL: postgresql://postgres:${PG_PASSWORD}@postgres:5432/mydb
-      PORT: "8080"
-    depends_on: [postgres]
-    restart: unless-stopped
-
-  python:
-    build: ./python
+  app:
+    build: ./app
     environment:
       BOT_ID: ${BOT_ID}
       BOT_SECRET: ${BOT_SECRET}
-      CPP_SERVICE_URL: http://cpp:8080
-    depends_on: [cpp]
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DATABASE_URL: postgresql://postgres:${PG_PASSWORD}@postgres:5432/mydb
+    depends_on: [postgres]
     restart: unless-stopped
 
 volumes:
@@ -220,20 +202,19 @@ volumes:
 
 1. **Phase 0 前置**：确认企业微信账号可创建智能机器人（认证）；拿到 Bot ID/Secret；拿到 DeepSeek API Key。
 2. **Phase 1 数据库**：写 `sql/init.sql`，在 PG 中建表。
-3. **Phase 2 C++ 服务**：先在本机/服务器用 `curl` 单测 `/ask`（不依赖企微），验证「调 DeepSeek + 写 PG」通。
-4. **Phase 3 Python 接入**：接 `wecom-aibot-python-sdk`，本地连上长连接，转发到 C++。
-5. **Phase 4 容器化**：写 Dockerfile（cpp 用 cmake + gcc 编译；python 用官方镜像），docker-compose 一键起。
+3. **Phase 2 LangGraph 应用**：先脱离企微，写 `graph.py` + `tests/test_graph.py`，用 `graph.ainvoke` 直接单测「调 DeepSeek + 写 PG + checkpoint 持久化」。
+4. **Phase 3 企微接入**：接 `wecom-aibot-python-sdk`，本地连上长连接，把消息转发到 graph。
+5. **Phase 4 容器化**：写 Dockerfile（`python:3.12-slim`）+ docker-compose 一键起。
 6. **Phase 5 端到端联调**：企微里 @机器人 提问，观察回答 + PG 记录 + 日志。
 
 ## 验证
 
-- **C++ 单测**（无需企微）：
+- **Graph 单测**（无需企微）：
   ```bash
-  curl -X POST http://127.0.0.1:8080/ask \
-    -H 'Content-Type: application/json' \
-    -d '{"question":"今天天气怎么样？","userid":"test"}'
+  python -m pytest tests/test_graph.py
   ```
-  预期：返回 `{"answer":"..."}`，且 `messages` 表新增 2 条记录（user + assistant）。
-- **Python 单测**：启动后日志显示长连接鉴权成功；本地模拟发一条消息事件，确认能转发到 C++ 并拿到回答。
+  预期：`graph.ainvoke` 返回 `answer`，且 `messages` 表新增 2 条记录（user + assistant），checkpoint 表有对应 thread 状态。
+- **多轮验证**：同一 `thread_id` 连续问两次，第二次能引用第一次上下文（验证 checkpointer 生效）。
+- **Python 接入单测**：启动后日志显示长连接鉴权成功；本地模拟发一条消息事件，确认能转发到 graph 并拿到回答。
 - **全链路**：企微群/单聊 @机器人 提问 → 收到正确回答；`messages` 表有完整对话记录；重复消息（同 msgid）不重复入库。
-- **健康检查**：`GET /health` 返回 ok；`docker compose ps` 三服务均 running。
+- **健康检查**：`docker compose ps` 两服务均 running；app 进程存活且 PG 连通（可选加极简 `/health` 端点用于 Docker healthcheck）。
