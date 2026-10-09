@@ -1,0 +1,28 @@
+# 企微接入
+wecom-aibot-python-sdk
+
+# LangChain / LangGraph
+langchain-core
+langchain-deepseek
+langgraph
+langgraph-checkpoint-postgres
+langchain-postgres
+langchain-text-splitters
+langchain-huggingface
+
+# embedding / 文档解析
+sentence-transformers
+pymupdf
+docx2txt
+
+# 数据库 / 网络
+psycopg[binary]
+httpx
+
+# 配置
+pydantic-settings
+python-dotenv
+
+# 开发
+ruff
+pytest
