@@ -62,7 +62,7 @@
 | Embedding | `sentence-transformers` + `BAAI/bge-m3` | 本地 1024 维，中文强 |
 | 向量存储 | `langchain-postgres`（`PGVector`）+ `pgvector` 扩展 | 复用云 PG |
 | 状态持久化 | `langgraph-checkpoint-postgres`（`PostgresSaver`） | 多轮上下文存 PG |
-| 文档解析 | `pymupdf`（PDF）/ `python-docx`（Word）/ 内建（md、txt） | `langchain-community` 统一加载 |
+| 文档解析 | `pymupdf`（PDF）/ `docx2txt`（Word）/ 内建（md、txt） | 直接调用，轻量 |
 | 业务日志/排重 | `psycopg[binary]` | 直接读写 `messages` / `request_log` |
 | 配置 | `pydantic-settings` + `python-dotenv` | 读环境变量 |
 | 代码风格 | `ruff` | `ruff format` + `ruff check`，PEP 8 |
@@ -83,25 +83,27 @@
 life-assistant/
 ├── docker-compose.yml
 ├── README.md
+├── pyproject.toml              # ruff + pytest 配置
+├── requirements.txt            # 依赖清单
+├── .env.example                # 环境变量模板（.env 同目录，已被 gitignore 排除）
 ├── sql/
 │   └── init.sql                # 建表 + 启用 pgvector
-├── docs/                       # 待摄入的文档（几十篇放这里）
+├── docs/                       # 待摄入的文档
 ├── app/
-│   ├── requirements.txt        # 或 pyproject.toml
-│   ├── .env.example
-│   ├── main.py                 # 入口：起企微长连接，装配 graph
+│   ├── __init__.py
 │   ├── config.py               # 读环境变量
-│   ├── bot.py                  # 企微接入：收消息、@过滤、排重、回复
-│   ├── graph.py                # LangGraph 图：retrieve + generate
-│   ├── state.py                # GraphState 类型定义
-│   ├── llm.py                  # ChatDeepSeek
-│   ├── embed.py                # bge-m3 本地 embedding（query/文档共用）
+│   ├── embed.py                # bge-m3 本地 embedding
 │   ├── vector_store.py         # PGVector 封装：写入 / 相似检索
-│   ├── db.py                   # psycopg：messages/request_log + msgid 排重
-│   └── ingest.py               # 离线摄入脚本：解析 → 分块 → embed → 入库
+│   ├── ingest.py               # 离线摄入脚本：解析 → 分块 → embed → 入库
+│   ├── llm.py                  # ChatDeepSeek（Phase 3）
+│   ├── state.py                # GraphState 类型定义（Phase 3）
+│   ├── graph.py                # LangGraph 图：retrieve + generate（Phase 3）
+│   ├── db.py                   # psycopg：messages/request_log + 排重（Phase 3）
+│   ├── bot.py                  # 企微接入（Phase 4）
+│   └── main.py                 # 入口：起企微长连接（Phase 4）
 └── tests/
-    ├── test_graph.py           # 脱离企微，直接 ainvoke 单测
-    └── test_ingest.py          # 摄入 + 检索单测
+    ├── test_ingest.py          # 解析 + 分块单测
+    └── test_graph.py           # Phase 3
 ```
 
 ## 组件详细设计
