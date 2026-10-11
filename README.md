@@ -9,7 +9,7 @@
 已确认的关键决策：
 
 - **生成模型**：DeepSeek API（OpenAI 兼容接口），经 `langchain-deepseek` 接入
-- **Embedding**：**本地 `BAAI/bge-m3`**（DeepSeek 官方无 embedding 接口，故本地向量化；中文强、免费、离线）
+- **Embedding**：**本地 `BAAI/bge-small-zh-v1.5`**（DeepSeek 官方无 embedding 接口，故本地向量化；中文强、免费、离线）
 - **向量存储**：同一台 PG 上的 **`pgvector`** 扩展（不用另引独立向量库）
 - **编排框架**：LangGraph（`retrieve → generate`，预留 agentic 化空间）
 - **企微接入**：企业微信「智能机器人」→ API 接入 → **WebSocket 长连接模式**（无需备案域名/HTTPS）
@@ -21,7 +21,7 @@
 
 **完全可行。** RAG 正是「LangGraph + 云 PG + DeepSeek」这套技术栈最标准的落地场景。两个新增依赖已确认：
 
-1. **Embedding**：DeepSeek 官方不提供 embedding 接口，改用本地 `bge-m3`（`sentence-transformers` / `langchain-huggingface`）。
+1. **Embedding**：DeepSeek 官方不提供 embedding 接口，改用本地 `bge-small-zh-v1.5`（`sentence-transformers` / `langchain-huggingface`）。
 2. **pgvector**：现有 `postgres:17` 官方镜像默认不含该扩展，需换成 `pgvector/pgvector:pg17` 镜像（现有 `mydb` 基本为空，迁移成本≈0）。
 
 唯一不变的技术难点仍是企微 WebSocket 长连接协议——由官方 SDK 屏蔽。
@@ -40,7 +40,7 @@
 │     retrieve 节点：query embedding → pgvector 相似检索 top-k       │
 │     generate 节点：[检索上下文 + 问题] → DeepSeek → 答案 + 引用来源  │
 │                                                              │
-│  embed.py —— 本地 bge-m3 向量化                                 │
+│  embed.py —— 本地 bge-small-zh-v1.5 向量化                                 │
 │  db.py —— psycopg 读写 messages / request_log                  │
 └──────────────────────────────┬───────────────────────────────┘
                                ▼
@@ -49,7 +49,7 @@
           chunks 文档向量 · LangGraph checkpoint 状态
 
 离线（一次性/增量）：
-  docs/ → ingest.py → 解析 → 分块 → bge-m3 → chunks 表
+  docs/ → ingest.py → 解析 → 分块 → bge-small-zh-v1.5 → chunks 表
 ```
 
 ## 技术选型
@@ -59,7 +59,7 @@
 | 企微接入 | `wecom-aibot-python-sdk` | 官方 Python SDK，asyncio 长连接 |
 | LLM 编排 | `langgraph` | 有状态工作流，`retrieve → generate` |
 | 生成模型 | `langchain-deepseek`（`ChatDeepSeek`） | `model="deepseek-chat"` |
-| Embedding | `sentence-transformers` + `BAAI/bge-m3` | 本地 1024 维，中文强 |
+| Embedding | `sentence-transformers` + `BAAI/bge-small-zh-v1.5` | 本地 512 维，中文强 |
 | 向量存储 | `langchain-postgres`（`PGVector`）+ `pgvector` 扩展 | 复用云 PG |
 | 状态持久化 | `langgraph-checkpoint-postgres`（`PostgresSaver`） | 多轮上下文存 PG |
 | 文档解析 | `pymupdf`（PDF）/ `docx2txt`（Word）/ 内建（md、txt） | 直接调用，轻量 |
@@ -92,7 +92,7 @@ life-assistant/
 ├── app/
 │   ├── __init__.py
 │   ├── config.py               # 读环境变量
-│   ├── embed.py                # bge-m3 本地 embedding
+│   ├── embed.py                # bge-small-zh-v1.5 本地 embedding
 │   ├── vector_store.py         # PGVector 封装：写入 / 相似检索
 │   ├── ingest.py               # 离线摄入脚本：解析 → 分块 → embed → 入库
 │   ├── llm.py                  # ChatDeepSeek（Phase 3）
@@ -136,20 +136,20 @@ CREATE TABLE IF NOT EXISTS request_log (
 );
 ```
 
-- `chunks` 向量表由 `PGVector` 首次写入时**自动建**（含 `embedding vector(1024)`、`document`、`cmetadata`），`cmetadata` 里存来源信息（文件名、页码/块号）供引用。
+- `chunks` 向量表由 `PGVector` 首次写入时**自动建**（含 `embedding vector(512)`、`document`、`cmetadata`），`cmetadata` 里存来源信息（文件名、页码/块号）供引用。
 - `messages` 独立保留，用于**幂等排重**与**可读审计日志**；LangGraph checkpoint 表由 `PostgresSaver` 自动建。
 
 ### 2. 文档摄入（`ingest.py`，离线）
 
 1. 遍历 `docs/`，按扩展名选 loader：PDF→`pymupdf`、`.docx`→`python-docx`、md/txt→直接读。
 2. 分块：`RecursiveCharacterTextSplitter`，块约 500–800 字、重叠 100–150，保留 `source`（文件名）+ 页/块号到 metadata。
-3. `embed.py` 用 bge-m3 逐块向量化（1024 维）。
+3. `embed.py` 用 bge-small-zh-v1.5 逐块向量化（512 维）。
 4. 写入 `PGVector`（collection=`knowledge`），metadata 存来源。
 5. 支持**增量摄入**：按文件 hash 跳过已摄入内容（v1 可先全量，hash 去重作为增强）。
 
 ### 3. Embedding（`embed.py`）
 
-- `HuggingFaceEmbeddings(model_name="BAAI/bge-m3")`（底层 `sentence-transformers`）。
+- `HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")`（底层 `sentence-transformers`）。
 - 查询用 bge 推荐的查询前缀（`"为这个句子生成表示以用于检索相关文章："`），文档侧不加，可小幅提升中文检索效果。
 - 首次运行需下载模型（约 2 GB），CPU 推理对"几十篇 + 低并发"完全够用。
 
@@ -232,7 +232,7 @@ volumes:
   hf_cache:
 ```
 
-> 说明：Dockerfile 在构建时下载 bge-m3 模型（或首次运行下载，走 `hf_cache` 卷）。现有独立 PG 容器是官方 `postgres:17`、不含 pgvector，且 `mydb` 基本为空，建议直接换 `pgvector/pgvector:pg17` 由 compose 统一管理。若坚持复用现有容器，则需在其内 `apt` 安装 pgvector 扩展后执行 `CREATE EXTENSION vector;`。
+> 说明：Dockerfile 在构建时下载 bge-small-zh-v1.5 模型（或首次运行下载，走 `hf_cache` 卷）。现有独立 PG 容器是官方 `postgres:17`、不含 pgvector，且 `mydb` 基本为空，建议直接换 `pgvector/pgvector:pg17` 由 compose 统一管理。若坚持复用现有容器，则需在其内 `apt` 安装 pgvector 扩展后执行 `CREATE EXTENSION vector;`。
 
 ## 实施阶段（按阶段推进，完成后勾选 `[x]`）
 
@@ -246,7 +246,7 @@ volumes:
   - 做：写 `sql/init.sql`（`messages` + `request_log` + `CREATE EXTENSION vector`）；PG 换 `pgvector/pgvector:pg17`。
   - 验证：`psql` 执行后 `\dx` 有 `vector` 扩展；`\dt` 能看到 `messages`、`request_log`。
 
-- [ ] **Phase 2 文档摄入**
+- [x] **Phase 2 文档摄入**
   - 做：`embed.py`、`vector_store.py`、`ingest.py` + `tests/test_ingest.py`；`docs/` 放入几篇测试文档。
   - 验证：跑 `python -m app.ingest` 后，向量表有对应条数；用一条已知问题检索，能命中预期文档块（含正确 `source`）。
 
@@ -259,7 +259,7 @@ volumes:
   - 验证：启动后日志显示长连接鉴权成功；本地模拟一条消息事件，确认转发到 graph 并拿到带引用的回答。
 
 - [ ] **Phase 5 容器化**
-  - 做：Dockerfile（`python:3.12-slim`，构建时拉 bge-m3）+ `docker-compose.yml`（pgvector + app）。
+  - 做：Dockerfile（`python:3.12-slim`，构建时拉 bge-small-zh-v1.5）+ `docker-compose.yml`（pgvector + app）。
   - 验证：`docker compose up -d` 后两服务 running；`docker compose logs app` 无报错；容器内 `graph.ainvoke` 能检索并生成。
 
 - [ ] **Phase 6 端到端联调**

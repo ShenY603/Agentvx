@@ -27,11 +27,11 @@ class Settings(BaseSettings):
     # DeepSeek
     deepseek_api_key: str = ""
 
-    # embedding 与检索
-    embedding_model: str = "BAAI/bge-m3"
+    # embedding 与检索（bge-small-zh-v1.5：小内存服务器可用，几十篇文档足够）
+    embedding_model: str = "BAAI/bge-small-zh-v1.5"
     collection_name: str = "knowledge"
-    chunk_size: int = 600
-    chunk_overlap: int = 120
+    chunk_size: int = 500
+    chunk_overlap: int = 100
     top_k: int = 4
 
 

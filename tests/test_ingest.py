@@ -27,7 +27,7 @@ def test_load_ignores_unsupported_suffix(tmp_path: Path) -> None:
 
 
 def test_split_keeps_source_and_produces_chunks(tmp_path: Path) -> None:
-    _write(tmp_path, "a.md", "句子一。句子二。句子三。" * 50)
+    _write(tmp_path, "a.md", "句子一。句子二。句子三。" * 100)
     docs = load_documents(tmp_path)
     chunks = split_documents(docs)
     assert len(chunks) > 1
