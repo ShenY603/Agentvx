@@ -10,6 +10,7 @@ def build_llm() -> ChatDeepSeek:
     return ChatDeepSeek(
         model="deepseek-chat",
         api_key=settings.deepseek_api_key,
+        openai_api_base="https://api.deepseek.com",
         temperature=0.3,
         max_retries=2,
         timeout=60,

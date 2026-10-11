@@ -4,8 +4,9 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
+from psycopg_pool import ConnectionPool
 
-from app.config import settings, sqlalchemy_url
+from app.config import settings
 from app.llm import build_llm
 from app.state import GraphState
 from app.vector_store import search
@@ -58,6 +59,11 @@ def build_graph():
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", END)
 
-    checkpointer = PostgresSaver.from_conn_string(sqlalchemy_url())
+    pool = ConnectionPool(
+        settings.database_url,
+        open=True,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+    )
+    checkpointer = PostgresSaver(pool)
     checkpointer.setup()
     return graph.compile(checkpointer=checkpointer)

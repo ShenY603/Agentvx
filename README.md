@@ -2,6 +2,8 @@
 
 > v3：纯 Python + LangGraph + RAG（pgvector + 本地 embedding）。从「生活问答」升级为「知识问答 agent」——用户 @机器人 提问，系统基于自建文档库检索并生成**带引用来源**的回答。
 
+> 踩坑记录（问题排查）见 [Problem.md](Problem.md)。
+
 ## Context（背景）
 
 用户想做一个「知识问答 agent」：接入企业微信，用户 @机器人 提问，系统从用户自己的文档库中检索相关内容，给出**有理有据、可溯源**的回答。技术栈为**纯 Python**，数据库用**云服务器上的 PostgreSQL**（已就绪）。
@@ -83,6 +85,7 @@
 life-assistant/
 ├── docker-compose.yml
 ├── README.md
+├── Problem.md                  # 踩坑记录（问题排查）
 ├── pyproject.toml              # ruff + pytest 配置
 ├── requirements.txt            # 依赖清单
 ├── .env.example                # 环境变量模板（.env 同目录，已被 gitignore 排除）
@@ -151,7 +154,7 @@ CREATE TABLE IF NOT EXISTS request_log (
 
 - `HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")`（底层 `sentence-transformers`）。
 - 查询用 bge 推荐的查询前缀（`"为这个句子生成表示以用于检索相关文章："`），文档侧不加，可小幅提升中文检索效果。
-- 首次运行需下载模型（约 2 GB），CPU 推理对"几十篇 + 低并发"完全够用。
+- 模型需预下载（bge-small-zh-v1.5 约 100MB），运行时离线加载；CPU 推理对"几十篇 + 低并发"完全够用。
 
 ### 4. LangGraph 应用（`graph.py` / `state.py`）
 
@@ -250,7 +253,7 @@ volumes:
   - 做：`embed.py`、`vector_store.py`、`ingest.py` + `tests/test_ingest.py`；`docs/` 放入几篇测试文档。
   - 验证：跑 `python -m app.ingest` 后，向量表有对应条数；用一条已知问题检索，能命中预期文档块（含正确 `source`）。
 
-- [ ] **Phase 3 RAG 图**
+- [x] **Phase 3 RAG 图**
   - 做：`state.py`、`llm.py`、`db.py`、`graph.py` + `tests/test_graph.py`。
   - 验证：`python -m pytest tests/test_graph.py` 通过；`graph.invoke` 返回带引用的 answer + sources；checkpoint 表有对应 thread 状态。（messages 表落库/排重由 Phase 4 的 bot 触发）
 
