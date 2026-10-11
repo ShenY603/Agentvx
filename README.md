@@ -252,7 +252,7 @@ volumes:
 
 - [ ] **Phase 3 RAG 图**
   - 做：`state.py`、`llm.py`、`db.py`、`graph.py` + `tests/test_graph.py`。
-  - 验证：`python -m pytest tests/test_graph.py` 通过；答案来自文档且带 `来源`；`messages` 表新增 user+assistant 两条，checkpoint 表有对应 thread；同一 thread 连问两次能引用上文。
+  - 验证：`python -m pytest tests/test_graph.py` 通过；`graph.invoke` 返回带引用的 answer + sources；checkpoint 表有对应 thread 状态。（messages 表落库/排重由 Phase 4 的 bot 触发）
 
 - [ ] **Phase 4 企微接入**
   - 做：`config.py`、`bot.py`，接 SDK 长连接，转发到 graph。

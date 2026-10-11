@@ -36,3 +36,11 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def sqlalchemy_url() -> str:
+    """SQLAlchemy 连接串（显式 psycopg 驱动），供 PGVector / PostgresSaver 使用。"""
+    url = settings.database_url
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return url

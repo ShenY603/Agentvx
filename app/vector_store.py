@@ -3,16 +3,8 @@
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
 
-from app.config import settings
+from app.config import settings, sqlalchemy_url
 from app.embed import embed_query, get_embedding
-
-
-def _sqlalchemy_url() -> str:
-    """PGVector 走 SQLAlchemy，需显式指定 psycopg(v3) 驱动；DATABASE_URL 保持 libpq 格式。"""
-    url = settings.database_url
-    if url.startswith("postgresql://"):
-        return url.replace("postgresql://", "postgresql+psycopg://", 1)
-    return url
 
 
 def build_store() -> PGVector:
@@ -20,7 +12,7 @@ def build_store() -> PGVector:
     return PGVector(
         embeddings=get_embedding(),
         collection_name=settings.collection_name,
-        connection=_sqlalchemy_url(),
+        connection=sqlalchemy_url(),
         use_jsonb=True,
     )
 
