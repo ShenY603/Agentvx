@@ -82,3 +82,35 @@
 - **现象**：`test_split_keeps_source_and_produces_chunks` 失败。
 - **根因**：测试文本 `"句子一。句子二。句子三。" * 50` = 600 字符，正好等于 `chunk_size`，未触发切分。
 - **解决**：文本加长到 `* 100`。
+
+## 七、SDK 已知噪声
+
+### 15. Ctrl+C 退出时刷屏 `Task was destroyed but it is pending`
+- **现象**：`python -m app.main` 启动、鉴权都正常，但 `Ctrl+C` 退出时刷一堆 `Task was destroyed but it is pending`、`Event loop is closed`、`coroutine ... was never awaited`。
+- **根因**：SDK 的 `run()` 在 KeyboardInterrupt 里调用的是同步 `disconnect()`，而内部清理（心跳、收包、断开）是 async，未被 await 就被 `loop.close()` 销毁。
+- **影响**：**纯退出噪声，不影响功能**（连接已正常关闭）。
+- **解决**：v1 可忽略；如介意，可在 `main.py` 自行管理事件循环、优雅 await 异步断开。
+
+## 八、Docker 部署
+
+### 16. `docker build` 拉基础镜像报 502（Docker Hub 加速器失效）
+- **现象**：`docker compose up -d --build` 报 `failed to resolve source metadata for docker.io/library/python:3.12-slim: ... 502 Bad Gateway`（连 `docker.m.daocloud.io`）。
+- **根因**：国内拉 Docker Hub 需走镜像加速器，DaoCloud（`docker.m.daocloud.io`）等老加速器频繁失效/宕机。
+- **解决**：改 `/etc/docker/daemon.json` 换可用镜像（如 `dockerproxy.net`、`docker.1ms.run`），`sudo systemctl restart docker`。测镜像可用性：`curl -m 8 -o /dev/null -s -w "%{http_code}\n" "https://<mirror>/v2/"`（返回 200/401=可用）。
+
+### 17. Docker 构建装 torch 极慢 / 白下 CUDA 包
+- **现象**：`pip install -r requirements.txt` 下载 torch + 一堆 `nvidia-*-cu13` 包（共 2~3GB）极慢。
+- **根因**：torch 默认装 GPU（CUDA）版，带大量 nvidia 依赖（服务器无 GPU 纯白下）；且默认 PyPI 源在国内慢。
+- **解决**：Dockerfile 先装 CPU 版 torch（`pip install torch --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cpu/`，~190MB，上海交大镜像；阿里云 pytorch 镜像已失效），再装其余依赖；pip 用清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。
+
+## 九、补充
+
+### 18. 回复文本消息报 `errcode=40008, invalid message type`
+- **现象**：消息收到、检索生成都正常，但回复被企微服务器拒绝：`Reply ack error: errcode=40008, errmsg=invalid message type`。
+- **根因**：企微智能机器人长连接模式下，回复要用 **stream 类型**；直接 `reply(frame, {"msgtype": "text", ...})` 会被拒。
+- **解决**：用 SDK 的 `reply_stream(frame, generate_req_id("stream"), content, True)`（内部自动构造 `{"msgtype": "stream", "stream": {...}}`）。
+
+### 19. 回复的「来源」列表重复（同一文件出现多次）
+- **现象**：检索 top-k 里多个 chunk 来自同一文件，来源列表重复列出该文件。
+- **根因**：`_extract_sources` 未去重。
+- **解决**：来源列表去重（用 set 记录已出现过的 source）。

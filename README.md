@@ -4,6 +4,17 @@
 
 > 踩坑记录（问题排查）见 [Problem.md](Problem.md)。
 
+## 项目总结
+
+**一个跑通的企业微信知识问答 Agent（RAG）**：用户在企业微信里 @机器人 提问，系统基于自建文档库检索，用 DeepSeek 生成**带引用来源**的回答。
+
+- **技术栈**：Python · LangGraph · DeepSeek · PostgreSQL + pgvector · bge-small-zh-v1.5（本地 embedding）· Docker Compose · wecom-aibot-python-sdk（WebSocket 长连接）
+- **架构**：LangGraph 编排 `retrieve → generate`，`PostgresSaver` 持久化多轮状态（`thread_id` 按会话隔离）；`bot.py`（接入）/ `graph.py`（编排）/ `db.py`（落库）/ `embed.py`（向量化）模块解耦
+- **工程**：分 7 阶段推进、每阶段带可执行验证；踩坑沉淀在 [Problem.md](Problem.md)（19 条：企微长连接协议、Docker 镜像、HF 离线加载、DeepSeek base_url、pgvector 认证等）
+- **部署**：云服务器 Docker 两容器（pgvector + app）常驻运行，全流程端到端跑通
+
+**状态**：✅ 全部 7 阶段完成（Phase 0~6）
+
 ## Context（背景）
 
 用户想做一个「知识问答 agent」：接入企业微信，用户 @机器人 提问，系统从用户自己的文档库中检索相关内容，给出**有理有据、可溯源**的回答。技术栈为**纯 Python**，数据库用**云服务器上的 PostgreSQL**（已就绪）。
@@ -209,8 +220,8 @@ services:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${PG_PASSWORD}
       POSTGRES_DB: mydb
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -218,24 +229,22 @@ services:
     # 不映射端口到宿主机，仅内部网络可访问
 
   app:
-    build: ./app
+    build: .
     environment:
       BOT_ID: ${BOT_ID}
       BOT_SECRET: ${BOT_SECRET}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DATABASE_URL: postgresql://postgres:${PG_PASSWORD}@postgres:5432/mydb
+      DATABASE_URL: postgresql://postgres@postgres:5432/mydb
     volumes:
-      - ./docs:/app/docs:ro          # 摄入用文档
-      - hf_cache:/root/.cache/huggingface   # embedding 模型缓存
+      - ./docs:/app/docs:ro
     depends_on: [postgres]
     restart: unless-stopped
 
 volumes:
   pgdata:
-  hf_cache:
 ```
 
-> 说明：Dockerfile 在构建时下载 bge-small-zh-v1.5 模型（或首次运行下载，走 `hf_cache` 卷）。现有独立 PG 容器是官方 `postgres:17`、不含 pgvector，且 `mydb` 基本为空，建议直接换 `pgvector/pgvector:pg17` 由 compose 统一管理。若坚持复用现有容器，则需在其内 `apt` 安装 pgvector 扩展后执行 `CREATE EXTENSION vector;`。
+> 说明：bge-small-zh-v1.5 模型在 Dockerfile 构建时下载并打进镜像，运行时离线加载；PG 用 `POSTGRES_HOST_AUTH_METHOD=trust`（无需密码）、`pgvector/pgvector:pg17` 镜像含 pgvector 扩展，由 compose 统一管理。起好后执行 `docker compose exec app python -m app.ingest` 摄一次文档。
 
 ## 实施阶段（按阶段推进，完成后勾选 `[x]`）
 
@@ -257,14 +266,14 @@ volumes:
   - 做：`state.py`、`llm.py`、`db.py`、`graph.py` + `tests/test_graph.py`。
   - 验证：`python -m pytest tests/test_graph.py` 通过；`graph.invoke` 返回带引用的 answer + sources；checkpoint 表有对应 thread 状态。（messages 表落库/排重由 Phase 4 的 bot 触发）
 
-- [ ] **Phase 4 企微接入**
-  - 做：`config.py`、`bot.py`，接 SDK 长连接，转发到 graph。
+- [x] **Phase 4 企微接入**
+  - 做：`bot.py`、`main.py`，接 SDK 长连接，转发到 graph。
   - 验证：启动后日志显示长连接鉴权成功；本地模拟一条消息事件，确认转发到 graph 并拿到带引用的回答。
 
-- [ ] **Phase 5 容器化**
+- [x] **Phase 5 容器化**
   - 做：Dockerfile（`python:3.12-slim`，构建时拉 bge-small-zh-v1.5）+ `docker-compose.yml`（pgvector + app）。
   - 验证：`docker compose up -d` 后两服务 running；`docker compose logs app` 无报错；容器内 `graph.ainvoke` 能检索并生成。
 
-- [ ] **Phase 6 端到端联调**
+- [x] **Phase 6 端到端联调**
   - 做：企微里 @机器人 提问，全链路打通。
   - 验证：收到**带引用来源**的正确回答；`messages` 有完整记录；重复 msgid 不重复入库；`request_log` 有耗时记录。

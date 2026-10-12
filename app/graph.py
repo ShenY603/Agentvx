@@ -24,10 +24,14 @@ def _format_context(docs: list[Document]) -> str:
 
 def _extract_sources(docs: list[Document]) -> list[str]:
     sources: list[str] = []
+    seen: set[str] = set()
     for doc in docs:
         source = doc.metadata.get("source", "未知来源")
         page = doc.metadata.get("page")
-        sources.append(f"{source}" + (f" 第{page}页" if page else ""))
+        label = f"{source}" + (f" 第{page}页" if page else "")
+        if label not in seen:
+            seen.add(label)
+            sources.append(label)
     return sources
 
 
