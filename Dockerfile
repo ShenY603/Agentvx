@@ -2,7 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 先装依赖（单独 COPY requirements，利用 Docker 层缓存；国内走清华 pip 镜像加速）
+# 先装 CPU 版 torch（服务器无 GPU，避免拉取几个 GB 的 CUDA/nvidia 包；国内走上海交大镜像）
+RUN pip install --no-cache-dir torch --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cpu/
+
+# 再装其余依赖（单独 COPY requirements，利用 Docker 层缓存；国内走清华 pip 镜像加速）
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 

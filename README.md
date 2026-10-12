@@ -263,6 +263,6 @@ volumes:
   - 做：Dockerfile（`python:3.12-slim`，构建时拉 bge-small-zh-v1.5）+ `docker-compose.yml`（pgvector + app）。
   - 验证：`docker compose up -d` 后两服务 running；`docker compose logs app` 无报错；容器内 `graph.ainvoke` 能检索并生成。
 
-- [ ] **Phase 6 端到端联调**
+- [x] **Phase 6 端到端联调**
   - 做：企微里 @机器人 提问，全链路打通。
   - 验证：收到**带引用来源**的正确回答；`messages` 有完整记录；重复 msgid 不重复入库；`request_log` 有耗时记录。

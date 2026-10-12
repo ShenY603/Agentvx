@@ -98,7 +98,7 @@
 - **根因**：国内拉 Docker Hub 需走镜像加速器，DaoCloud（`docker.m.daocloud.io`）等老加速器频繁失效/宕机。
 - **解决**：改 `/etc/docker/daemon.json` 换可用镜像（如 `dockerproxy.net`、`docker.1ms.run`），`sudo systemctl restart docker`。测镜像可用性：`curl -m 8 -o /dev/null -s -w "%{http_code}\n" "https://<mirror>/v2/"`（返回 200/401=可用）。
 
-### 17. Docker 构建装 torch 极慢
-- **现象**：`pip install -r requirements.txt` 下载 torch（1~2GB）极慢。
-- **根因**：默认 PyPI 源在国内慢。
-- **解决**：Dockerfile 里 pip 加清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。
+### 17. Docker 构建装 torch 极慢 / 白下 CUDA 包
+- **现象**：`pip install -r requirements.txt` 下载 torch + 一堆 `nvidia-*-cu13` 包（共 2~3GB）极慢。
+- **根因**：torch 默认装 GPU（CUDA）版，带大量 nvidia 依赖（服务器无 GPU 纯白下）；且默认 PyPI 源在国内慢。
+- **解决**：Dockerfile 先装 CPU 版 torch（`pip install torch --index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/`，~190MB，国内快），再装其余依赖；pip 用清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。

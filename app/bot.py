@@ -3,7 +3,7 @@
 import asyncio
 import time
 
-from aibot import WSClient, WSClientOptions
+from aibot import WSClient, WSClientOptions, generate_req_id
 from langchain_core.messages import HumanMessage
 
 from app.config import settings
@@ -78,4 +78,4 @@ def register_handlers(client: WSClient, graph) -> None:
         insert_message(None, userid, chatid, chattype, "assistant", reply_text)
         insert_request_log(chatid, status, latency_ms, detail)
 
-        await client.reply(frame, {"msgtype": "text", "text": {"content": reply_text}})
+        await client.reply_stream(frame, generate_req_id("stream"), reply_text, True)

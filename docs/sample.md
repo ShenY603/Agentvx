@@ -5,7 +5,7 @@
 ## 技术栈
 
 - 生成模型：DeepSeek（deepseek-chat）
-- 向量模型：本地 bge-m3
+- 向量模型：本地 bge-small-zh-v1.5
 - 编排框架：LangGraph
 - 数据库：PostgreSQL + pgvector
 
