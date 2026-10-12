@@ -4,6 +4,17 @@
 
 > 踩坑记录（问题排查）见 [Problem.md](Problem.md)。
 
+## 项目总结
+
+**一个跑通的企业微信知识问答 Agent（RAG）**：用户在企业微信里 @机器人 提问，系统基于自建文档库检索，用 DeepSeek 生成**带引用来源**的回答。
+
+- **技术栈**：Python · LangGraph · DeepSeek · PostgreSQL + pgvector · bge-small-zh-v1.5（本地 embedding）· Docker Compose · wecom-aibot-python-sdk（WebSocket 长连接）
+- **架构**：LangGraph 编排 `retrieve → generate`，`PostgresSaver` 持久化多轮状态（`thread_id` 按会话隔离）；`bot.py`（接入）/ `graph.py`（编排）/ `db.py`（落库）/ `embed.py`（向量化）模块解耦
+- **工程**：分 7 阶段推进、每阶段带可执行验证；踩坑沉淀在 [Problem.md](Problem.md)（19 条：企微长连接协议、Docker 镜像、HF 离线加载、DeepSeek base_url、pgvector 认证等）
+- **部署**：云服务器 Docker 两容器（pgvector + app）常驻运行，全流程端到端跑通
+
+**状态**：✅ 全部 7 阶段完成（Phase 0~6）
+
 ## Context（背景）
 
 用户想做一个「知识问答 agent」：接入企业微信，用户 @机器人 提问，系统从用户自己的文档库中检索相关内容，给出**有理有据、可溯源**的回答。技术栈为**纯 Python**，数据库用**云服务器上的 PostgreSQL**（已就绪）。

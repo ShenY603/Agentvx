@@ -101,4 +101,16 @@
 ### 17. Docker 构建装 torch 极慢 / 白下 CUDA 包
 - **现象**：`pip install -r requirements.txt` 下载 torch + 一堆 `nvidia-*-cu13` 包（共 2~3GB）极慢。
 - **根因**：torch 默认装 GPU（CUDA）版，带大量 nvidia 依赖（服务器无 GPU 纯白下）；且默认 PyPI 源在国内慢。
-- **解决**：Dockerfile 先装 CPU 版 torch（`pip install torch --index-url https://mirrors.aliyun.com/pytorch-wheels/cpu/`，~190MB，国内快），再装其余依赖；pip 用清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。
+- **解决**：Dockerfile 先装 CPU 版 torch（`pip install torch --index-url https://mirror.sjtu.edu.cn/pytorch-wheels/cpu/`，~190MB，上海交大镜像；阿里云 pytorch 镜像已失效），再装其余依赖；pip 用清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。
+
+## 九、补充
+
+### 18. 回复文本消息报 `errcode=40008, invalid message type`
+- **现象**：消息收到、检索生成都正常，但回复被企微服务器拒绝：`Reply ack error: errcode=40008, errmsg=invalid message type`。
+- **根因**：企微智能机器人长连接模式下，回复要用 **stream 类型**；直接 `reply(frame, {"msgtype": "text", ...})` 会被拒。
+- **解决**：用 SDK 的 `reply_stream(frame, generate_req_id("stream"), content, True)`（内部自动构造 `{"msgtype": "stream", "stream": {...}}`）。
+
+### 19. 回复的「来源」列表重复（同一文件出现多次）
+- **现象**：检索 top-k 里多个 chunk 来自同一文件，来源列表重复列出该文件。
+- **根因**：`_extract_sources` 未去重。
+- **解决**：来源列表去重（用 set 记录已出现过的 source）。
