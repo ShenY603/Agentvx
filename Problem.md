@@ -90,3 +90,15 @@
 - **根因**：SDK 的 `run()` 在 KeyboardInterrupt 里调用的是同步 `disconnect()`，而内部清理（心跳、收包、断开）是 async，未被 await 就被 `loop.close()` 销毁。
 - **影响**：**纯退出噪声，不影响功能**（连接已正常关闭）。
 - **解决**：v1 可忽略；如介意，可在 `main.py` 自行管理事件循环、优雅 await 异步断开。
+
+## 八、Docker 部署
+
+### 16. `docker build` 拉基础镜像报 502（Docker Hub 加速器失效）
+- **现象**：`docker compose up -d --build` 报 `failed to resolve source metadata for docker.io/library/python:3.12-slim: ... 502 Bad Gateway`（连 `docker.m.daocloud.io`）。
+- **根因**：国内拉 Docker Hub 需走镜像加速器，DaoCloud（`docker.m.daocloud.io`）等老加速器频繁失效/宕机。
+- **解决**：改 `/etc/docker/daemon.json` 换可用镜像（如 `dockerproxy.net`、`docker.1ms.run`），`sudo systemctl restart docker`。测镜像可用性：`curl -m 8 -o /dev/null -s -w "%{http_code}\n" "https://<mirror>/v2/"`（返回 200/401=可用）。
+
+### 17. Docker 构建装 torch 极慢
+- **现象**：`pip install -r requirements.txt` 下载 torch（1~2GB）极慢。
+- **根因**：默认 PyPI 源在国内慢。
+- **解决**：Dockerfile 里 pip 加清华镜像 `-i https://pypi.tuna.tsinghua.edu.cn/simple`。

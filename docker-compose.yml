@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: mydb
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    # 不映射端口到宿主机，仅内部网络可访问
+
+  app:
+    build: .
+    environment:
+      BOT_ID: ${BOT_ID}
+      BOT_SECRET: ${BOT_SECRET}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      DATABASE_URL: postgresql://postgres@postgres:5432/mydb
+    volumes:
+      - ./docs:/app/docs:ro
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  pgdata:

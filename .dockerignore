@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+.env
+.env.example
+docs
+.pytest_cache
+.ruff_cache
+.pdm-python
+.pdm-build
+tests

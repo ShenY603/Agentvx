@@ -209,8 +209,8 @@ services:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${PG_PASSWORD}
       POSTGRES_DB: mydb
+      POSTGRES_HOST_AUTH_METHOD: trust
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -218,24 +218,22 @@ services:
     # 不映射端口到宿主机，仅内部网络可访问
 
   app:
-    build: ./app
+    build: .
     environment:
       BOT_ID: ${BOT_ID}
       BOT_SECRET: ${BOT_SECRET}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
-      DATABASE_URL: postgresql://postgres:${PG_PASSWORD}@postgres:5432/mydb
+      DATABASE_URL: postgresql://postgres@postgres:5432/mydb
     volumes:
-      - ./docs:/app/docs:ro          # 摄入用文档
-      - hf_cache:/root/.cache/huggingface   # embedding 模型缓存
+      - ./docs:/app/docs:ro
     depends_on: [postgres]
     restart: unless-stopped
 
 volumes:
   pgdata:
-  hf_cache:
 ```
 
-> 说明：Dockerfile 在构建时下载 bge-small-zh-v1.5 模型（或首次运行下载，走 `hf_cache` 卷）。现有独立 PG 容器是官方 `postgres:17`、不含 pgvector，且 `mydb` 基本为空，建议直接换 `pgvector/pgvector:pg17` 由 compose 统一管理。若坚持复用现有容器，则需在其内 `apt` 安装 pgvector 扩展后执行 `CREATE EXTENSION vector;`。
+> 说明：bge-small-zh-v1.5 模型在 Dockerfile 构建时下载并打进镜像，运行时离线加载；PG 用 `POSTGRES_HOST_AUTH_METHOD=trust`（无需密码）、`pgvector/pgvector:pg17` 镜像含 pgvector 扩展，由 compose 统一管理。起好后执行 `docker compose exec app python -m app.ingest` 摄一次文档。
 
 ## 实施阶段（按阶段推进，完成后勾选 `[x]`）
 
@@ -261,7 +259,7 @@ volumes:
   - 做：`bot.py`、`main.py`，接 SDK 长连接，转发到 graph。
   - 验证：启动后日志显示长连接鉴权成功；本地模拟一条消息事件，确认转发到 graph 并拿到带引用的回答。
 
-- [ ] **Phase 5 容器化**
+- [x] **Phase 5 容器化**
   - 做：Dockerfile（`python:3.12-slim`，构建时拉 bge-small-zh-v1.5）+ `docker-compose.yml`（pgvector + app）。
   - 验证：`docker compose up -d` 后两服务 running；`docker compose logs app` 无报错；容器内 `graph.ainvoke` 能检索并生成。
 
