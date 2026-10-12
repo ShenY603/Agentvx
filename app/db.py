@@ -36,17 +36,6 @@ def message_exists(msgid: str) -> bool:
         return cur.fetchone() is not None
 
 
-def get_answer_by_msgid(msgid: str) -> str | None:
-    """排重命中时，取回该消息对应的历史回答。"""
-    with _connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT content FROM messages WHERE msgid = %s AND role = 'assistant' LIMIT 1",
-            (msgid,),
-        )
-        row = cur.fetchone()
-        return row[0] if row else None
-
-
 def insert_request_log(chatid: str | None, status: str, latency_ms: int, detail: str) -> None:
     """写入请求日志。"""
     with _connect() as conn, conn.cursor() as cur:

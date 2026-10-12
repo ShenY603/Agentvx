@@ -82,3 +82,11 @@
 - **现象**：`test_split_keeps_source_and_produces_chunks` 失败。
 - **根因**：测试文本 `"句子一。句子二。句子三。" * 50` = 600 字符，正好等于 `chunk_size`，未触发切分。
 - **解决**：文本加长到 `* 100`。
+
+## 七、SDK 已知噪声
+
+### 15. Ctrl+C 退出时刷屏 `Task was destroyed but it is pending`
+- **现象**：`python -m app.main` 启动、鉴权都正常，但 `Ctrl+C` 退出时刷一堆 `Task was destroyed but it is pending`、`Event loop is closed`、`coroutine ... was never awaited`。
+- **根因**：SDK 的 `run()` 在 KeyboardInterrupt 里调用的是同步 `disconnect()`，而内部清理（心跳、收包、断开）是 async，未被 await 就被 `loop.close()` 销毁。
+- **影响**：**纯退出噪声，不影响功能**（连接已正常关闭）。
+- **解决**：v1 可忽略；如介意，可在 `main.py` 自行管理事件循环、优雅 await 异步断开。

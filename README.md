@@ -257,8 +257,8 @@ volumes:
   - 做：`state.py`、`llm.py`、`db.py`、`graph.py` + `tests/test_graph.py`。
   - 验证：`python -m pytest tests/test_graph.py` 通过；`graph.invoke` 返回带引用的 answer + sources；checkpoint 表有对应 thread 状态。（messages 表落库/排重由 Phase 4 的 bot 触发）
 
-- [ ] **Phase 4 企微接入**
-  - 做：`config.py`、`bot.py`，接 SDK 长连接，转发到 graph。
+- [x] **Phase 4 企微接入**
+  - 做：`bot.py`、`main.py`，接 SDK 长连接，转发到 graph。
   - 验证：启动后日志显示长连接鉴权成功；本地模拟一条消息事件，确认转发到 graph 并拿到带引用的回答。
 
 - [ ] **Phase 5 容器化**
