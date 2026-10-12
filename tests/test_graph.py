@@ -5,13 +5,15 @@ from langchain_core.messages import HumanMessage
 from app.graph import build_graph
 
 
-def test_retrieve_and_generate_returns_cited_answer() -> None:
+def test_agent_returns_answer_with_sources() -> None:
     graph = build_graph()
     config = {"configurable": {"thread_id": "test-thread"}}
     result = graph.invoke(
-        {"messages": [HumanMessage(content="数据库用什么？")]},
+        {"messages": [HumanMessage(content="根据文档，这个项目部署在哪里？")]},
         config=config,
     )
-    assert isinstance(result["answer"], str)
-    assert result["answer"].strip()
-    assert result["sources"]
+    messages = result.get("messages", [])
+    assert messages
+    answer = str(messages[-1].content)
+    assert answer.strip()
+    assert result.get("sources")

@@ -64,7 +64,8 @@ def register_handlers(client: WSClient, graph) -> None:
                 {"messages": [HumanMessage(content=text)]},
                 {"configurable": {"thread_id": thread_id}},
             )
-            answer = result.get("answer") or ""
+            messages = result.get("messages") or []
+            answer = str(messages[-1].content) if messages else ""
             sources = result.get("sources") or []
             reply_text = _format_reply(answer, sources)
             status = "ok"

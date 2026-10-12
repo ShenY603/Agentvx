@@ -1,7 +1,6 @@
-"""LangGraph 图：retrieve → generate，带引用来源，checkpoint 持久化。"""
+"""LangGraph 图：agent 循环（LLM 决策调用工具 → 执行 → 再决策），带 checkpoint。"""
 
-from langchain_core.documents import Document
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from psycopg_pool import ConnectionPool
@@ -9,59 +8,58 @@ from psycopg_pool import ConnectionPool
 from app.config import settings
 from app.llm import build_llm
 from app.state import GraphState
-from app.vector_store import search
+from app.tools import TOOLS, run_tool
 
 _SYSTEM_PROMPT = (
-    "你是一个知识问答助手。请只依据下面给出的资料回答用户问题，"
-    "并在引用处用 [编号] 标注。如果资料中没有相关信息，"
-    "请直接回答：这个问题资料中没有相关内容。"
+    "你是一个知识问答助手，可以调用工具来回答问题。\n"
+    "- 知识/文档类问题：调用 search_knowledge_base 检索文档，再基于结果作答并标注引用。\n"
+    "- 数学计算：调用 calculator。\n"
+    "- 询问当前时间：调用 get_current_time。\n"
+    "如果检索结果没有相关内容，如实回答「资料中没有相关内容」。"
 )
 
 
-def _format_context(docs: list[Document]) -> str:
-    return "\n\n".join(f"[{i}] {doc.page_content}" for i, doc in enumerate(docs, start=1))
+def _agent(state: GraphState) -> dict:
+    """LLM 节点：决定回答问题或调用工具。"""
+    llm = build_llm().bind_tools(TOOLS)
+    messages = [SystemMessage(content=_SYSTEM_PROMPT), *state["messages"]]
+    response = llm.invoke(messages)
+    result: dict = {"messages": [response]}
+    # 新一轮用户提问时清空来源，避免上一轮来源串到本轮
+    if isinstance(state["messages"][-1], HumanMessage):
+        result["sources"] = []
+    return result
 
 
-def _extract_sources(docs: list[Document]) -> list[str]:
-    sources: list[str] = []
-    seen: set[str] = set()
-    for doc in docs:
-        source = doc.metadata.get("source", "未知来源")
-        page = doc.metadata.get("page")
-        label = f"{source}" + (f" 第{page}页" if page else "")
-        if label not in seen:
-            seen.add(label)
-            sources.append(label)
-    return sources
+def _tools(state: GraphState) -> dict:
+    """执行被调用的工具，并回填检索来源。"""
+    last = state["messages"][-1]
+    tool_messages: list[ToolMessage] = []
+    sources = list(state.get("sources", []))
+    for call in last.tool_calls:
+        text, new_sources = run_tool(call["name"], call.get("args") or {})
+        tool_messages.append(ToolMessage(content=text, tool_call_id=call["id"]))
+        if new_sources:
+            sources = list(dict.fromkeys(sources + new_sources))
+    return {"messages": tool_messages, "sources": sources}
 
 
-def _retrieve(state: GraphState) -> dict:
-    question = str(state["messages"][-1].content)
-    docs = search(question, k=settings.top_k)
-    return {"context": docs, "sources": _extract_sources(docs)}
-
-
-def _generate(state: GraphState) -> dict:
-    question = str(state["messages"][-1].content)
-    context_text = _format_context(state.get("context", []))
-    messages = [
-        SystemMessage(content=_SYSTEM_PROMPT),
-        HumanMessage(
-            content=f"资料：\n{context_text}\n\n用户问题：{question}\n\n请基于资料回答并标注引用。"
-        ),
-    ]
-    response = build_llm().invoke(messages)
-    return {"answer": response.content, "messages": [response]}
+def _should_continue(state: GraphState) -> str:
+    """agent 之后：还有工具调用则继续，否则结束。"""
+    last = state["messages"][-1]
+    if getattr(last, "tool_calls", None):
+        return "tools"
+    return END
 
 
 def build_graph():
-    """构造并编译图（含 PostgresSaver checkpoint）。"""
+    """构造并编译 agent 图（含 PostgresSaver checkpoint）。"""
     graph = StateGraph(GraphState)
-    graph.add_node("retrieve", _retrieve)
-    graph.add_node("generate", _generate)
-    graph.add_edge(START, "retrieve")
-    graph.add_edge("retrieve", "generate")
-    graph.add_edge("generate", END)
+    graph.add_node("agent", _agent)
+    graph.add_node("tools", _tools)
+    graph.add_edge(START, "agent")
+    graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
+    graph.add_edge("tools", "agent")
 
     pool = ConnectionPool(
         settings.database_url,
