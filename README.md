@@ -9,7 +9,7 @@
 **一个跑通的企业微信知识问答 Agent（RAG）**：用户在企业微信里 @机器人 提问，系统基于自建文档库检索，用 DeepSeek 生成**带引用来源**的回答。
 
 - **技术栈**：Python · LangGraph · DeepSeek · PostgreSQL + pgvector · bge-small-zh-v1.5（本地 embedding）· Docker Compose · wecom-aibot-python-sdk（WebSocket 长连接）
-- **架构**：LangGraph 编排 `retrieve → generate`，`PostgresSaver` 持久化多轮状态（`thread_id` 按会话隔离）；`bot.py`（接入）/ `graph.py`（编排）/ `db.py`（落库）/ `embed.py`（向量化）模块解耦
+- **架构**：LangGraph agent 循环（LLM 决策调用工具 → 执行 → 再决策），`PostgresSaver` 持久化多轮状态（`thread_id` 按会话隔离）；`bot.py`（接入）/ `graph.py`（编排）/ `tools.py`（工具）/ `db.py`（落库）/ `embed.py`（向量化）模块解耦
 - **工程**：分 7 阶段推进、每阶段带可执行验证；踩坑沉淀在 [Problem.md](Problem.md)（22 条：企微长连接协议、Docker 镜像、HF 离线加载、DeepSeek base_url、pgvector 认证、时区、checkpoint 历史污染等）
 - **部署**：云服务器 Docker 两容器（pgvector + app）常驻运行，全流程端到端跑通
 
@@ -24,7 +24,7 @@
 - **生成模型**：DeepSeek API（OpenAI 兼容接口），经 `langchain-deepseek` 接入
 - **Embedding**：**本地 `BAAI/bge-small-zh-v1.5`**（DeepSeek 官方无 embedding 接口，故本地向量化；中文强、免费、离线）
 - **向量存储**：同一台 PG 上的 **`pgvector`** 扩展（不用另引独立向量库）
-- **编排框架**：LangGraph（`retrieve → generate`，预留 agentic 化空间）
+- **编排框架**：LangGraph（agent 工具循环：LLM 决策调用 `search_knowledge_base` / `calculator` / `get_current_time`）
 - **企微接入**：企业微信「智能机器人」→ API 接入 → **WebSocket 长连接模式**（无需备案域名/HTTPS）
 - **文档**：PDF / Word / Markdown / txt，约几十篇
 - **回答要求**：**附引用来源**
@@ -49,9 +49,10 @@
 │                                                              │
 │  bot.py —— wecom-aibot-python-sdk 长连接：收消息 / 排重 / 回复     │
 │                                                              │
-│  graph.py —— LangGraph 编排                                    │
-│     retrieve 节点：query embedding → pgvector 相似检索 top-k       │
-│     generate 节点：[检索上下文 + 问题] → DeepSeek → 答案 + 引用来源  │
+│  graph.py —— LangGraph agent 循环                              │
+│     agent 节点：LLM 决策（直接回答 / 调用工具）                     │
+│     tools 节点：search_knowledge_base / calculator / get_current_time │
+│  tools.py —— 工具定义与执行                                     │
 │                                                              │
 │  embed.py —— 本地 bge-small-zh-v1.5 向量化                                 │
 │  db.py —— psycopg 读写 messages / request_log                  │
@@ -70,7 +71,7 @@
 | 组件 | 选型 | 说明 |
 |------|------|------|
 | 企微接入 | `wecom-aibot-python-sdk` | 官方 Python SDK，asyncio 长连接 |
-| LLM 编排 | `langgraph` | 有状态工作流，`retrieve → generate` |
+| LLM 编排 | `langgraph` | 有状态 agent 循环：LLM 决策调用工具 |
 | 生成模型 | `langchain-deepseek`（`ChatDeepSeek`） | `model="deepseek-chat"` |
 | Embedding | `sentence-transformers` + `BAAI/bge-small-zh-v1.5` | 本地 512 维，中文强 |
 | 向量存储 | `langchain-postgres`（`PGVector`）+ `pgvector` 扩展 | 复用云 PG |
@@ -84,7 +85,7 @@
 ## 编码约定（本项目统一遵循）
 
 - 所有 Python 代码写在项目目录下（`app/`、`tests/`、`sql/`、`docs/`）。
-- 分文件编写：入口 / 配置 / 接入 / 编排 / 状态 / 模型 / embedding / DB / 向量库 / 摄入 各一文件。
+- 分文件编写：入口 / 配置 / 接入 / 编排 / 工具 / 状态 / 模型 / embedding / DB / 向量库 / 摄入 各一文件。
 - 模块解耦：`bot.py`（接入）与 `graph.py`（编排）通过函数/异步调用衔接，不互相侵入内部实现。
 - 文件名全小写。
 - 格式统一：**ruff**（`ruff format` + `ruff check`），PEP 8。
@@ -110,8 +111,9 @@ life-assistant/
 │   ├── vector_store.py         # PGVector 封装：写入 / 相似检索
 │   ├── ingest.py               # 离线摄入脚本：解析 → 分块 → embed → 入库
 │   ├── llm.py                  # ChatDeepSeek（Phase 3）
+│   ├── tools.py                # 工具：search_knowledge_base / calculator / get_current_time
 │   ├── state.py                # GraphState 类型定义（Phase 3）
-│   ├── graph.py                # LangGraph 图：retrieve + generate（Phase 3）
+│   ├── graph.py                # LangGraph agent 循环（Phase 3）
 │   ├── db.py                   # psycopg：messages/request_log + 排重（Phase 3）
 │   ├── bot.py                  # 企微接入（Phase 4）
 │   └── main.py                 # 入口：起企微长连接（Phase 4）
@@ -167,19 +169,20 @@ CREATE TABLE IF NOT EXISTS request_log (
 - 查询用 bge 推荐的查询前缀（`"为这个句子生成表示以用于检索相关文章："`），文档侧不加，可小幅提升中文检索效果。
 - 模型需预下载（bge-small-zh-v1.5 约 100MB），运行时离线加载；CPU 推理对"几十篇 + 低并发"完全够用。
 
-### 4. LangGraph 应用（`graph.py` / `state.py`）
+### 4. LangGraph 应用（`graph.py` / `state.py` / `tools.py`）
 
-- **State**：`MessagesState`（`messages`）+ 元数据（`userid/chatid/chattype/msgid`）+ `context`（检索到的文档块）+ `sources`（引用）。
+- **State**：`messages`（`add_messages` 累积历史，含工具调用/结果）+ `sources`（引用来源，检索时回填）。
 - **节点**：
-  - `retrieve`：取最新用户问题 → query embedding → `PGVector` 相似检索 top-k → 写回 `context` + `sources`。
-  - `generate`：用 `system` 提示词 + `context`（带来源标注）+ 历史 + 当前问题 → `ChatDeepSeek` 生成 → 输出答案 + 引用。
-- **边**：`START → retrieve → generate → END`。
+  - `agent`：`ChatDeepSeek.bind_tools(TOOLS)` 决策——直接回答，或返回工具调用；新一轮用户提问时清空 `sources`。
+  - `tools`：执行被调用的工具，把 `search_knowledge_base` 命中的来源追加进 `sources`。
+- **边**：`START → agent`；`agent` 按「有无 tool_calls」条件分支到 `tools` 或 `END`；`tools → agent`（循环）。
+- **工具**（`tools.py`）：`search_knowledge_base`（检索知识库）/ `calculator`（安全四则运算）/ `get_current_time`（北京时间）。
 - **checkpointer**：`PostgresSaver`，`thread_id = chatid or userid`。
-- **v2 升级点**：把 `retrieve` 变成工具、加 query 改写 / 多跳 / 条件分支，即可 agentic 化（不改整体骨架）。
+- **提示词**：知识类问题必须先检索、计算/时间必须调工具、禁止复述历史里的旧答案；检索无内容时回答「资料中没有相关内容」。
 
 ### 5. 检索与引用来源
 
-- system 提示词要求：**只依据给定资料回答**，句末用 `[1][2]` 标注出处；资料不足时明确说"这个问题资料里没有"。
+- 提示词要求：知识类问题先检索再作答、句末用 `[1][2]` 标注出处；资料不足时回答「资料中没有相关内容」。
 - 回复格式（企微文本）：
   ```
   <回答正文>……[1][2]
@@ -197,7 +200,7 @@ CREATE TABLE IF NOT EXISTS request_log (
 ### 7. 企微接入（`bot.py`）
 
 - 配置：`BOT_ID`、`BOT_SECRET`。
-- 流程：SDK 建立长连接鉴权 → 收 `text` 消息（群聊先判断是否 @机器人）→ `msgid` 排重 → 写 `role='user'` → `graph.ainvoke`（或 `astream`）→ 写 `role='assistant'` + `request_log` → SDK 回复。
+- 流程：SDK 建立长连接鉴权 → 收 `text` 消息（群聊先判断是否 @机器人）→ `msgid` 排重 → 写 `role='user'` → `graph.invoke`（经 `asyncio.to_thread` 跑同步调用，避免阻塞事件循环）→ 写 `role='assistant'` + `request_log` → SDK 回复。
 - 异常兜底：失败回复固定文案「抱歉，暂时没查到相关资料～」，写 `request_log.status='error'`。
 
 ## 企微接入步骤（前置条件，需用户操作）
