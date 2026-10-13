@@ -60,7 +60,7 @@ frame = {
 ## 标准架构（模块解耦）
 
 - `bot.py` —— 企微接入：收消息 / msgid 排重 / 调 graph / 回复
-- `graph.py` —— LangGraph agent 循环（LLM 决策调用工具）；`tools.py` 定义工具（`search_knowledge_base` / `calculator` / `get_current_time`）
+- `graph.py` —— LangGraph agent 循环（LLM 决策调用工具）；`tools.py` 定义工具（知识库检索 / 网页搜索 / 天气 / 计算 / 时间）
 - `db.py` —— 落库 + 排重（messages / request_log）
 - `embed.py` / `vector_store.py` —— RAG 向量化与检索
 - `main.py` —— 装配：`graph = build_graph(); client = build_client(); register_handlers(client, graph); client.run()`

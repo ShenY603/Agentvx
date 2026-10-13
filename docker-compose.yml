@@ -17,6 +17,9 @@ services:
       BOT_ID: ${BOT_ID}
       BOT_SECRET: ${BOT_SECRET}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      AMAP_API_KEY: ${AMAP_API_KEY}
+      BOCHA_API_KEY: ${BOCHA_API_KEY}
+      DEFAULT_CITY: ${DEFAULT_CITY:-西安}
       DATABASE_URL: postgresql://postgres@postgres:5432/mydb
     volumes:
       - ./docs:/app/docs:ro

@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     chunk_overlap: int = 100
     top_k: int = 4
 
+    # 外部工具 API（天气 / 网页搜索）
+    amap_api_key: str = ""       # 高德天气 Web 服务 key
+    bocha_api_key: str = ""      # 博查网页搜索 key
+    default_city: str = "西安"   # 天气默认城市
+
 
 settings = Settings()
 

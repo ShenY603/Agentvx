@@ -4,6 +4,7 @@ import ast
 import operator
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from langchain_core.tools import tool
 
 from app.config import settings
@@ -65,6 +66,71 @@ def _time() -> str:
     return datetime.now(_CHINA_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _weather(city: str) -> str:
+    """查询高德天气实时天气。"""
+    key = settings.amap_api_key
+    if not key:
+        return "未配置高德天气 API Key，无法查询天气。"
+    city = (city or "").strip() or settings.default_city
+    try:
+        resp = httpx.get(
+            "https://restapi.amap.com/v3/weather/weatherInfo",
+            params={"city": city, "extensions": "base", "key": key},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:  # 网络/解析异常兜底为文本，不抛出
+        return f"天气查询失败：{exc}"
+    if data.get("status") != "1" or not data.get("lives"):
+        return f"未查询到「{city}」的天气（{data.get('info', '未知错误')}）"
+    lives = data["lives"]
+    # 城市名可能匹配到多个同名区县（如「西安」→ 黑龙江/吉林的「西安区」+ 陕西「西安市」），优先取市级结果
+    city_level = [live for live in lives if (live.get("city") or "").endswith("市")]
+    lives = city_level or lives
+    lines = []
+    for live in lives[:3]:
+        location = f"{live.get('province', '')}{live.get('city', '')}"
+        lines.append(
+            f"{location}：{live.get('weather', '')}，气温 {live.get('temperature', '')}℃，"
+            f"湿度 {live.get('humidity', '')}%，{live.get('winddirection', '')}风"
+            f"{live.get('windpower', '')}级（{live.get('reporttime', '')}）"
+        )
+    return "\n".join(lines)
+
+
+def _web_search(query: str) -> tuple[str, list[str]]:
+    """博查网页搜索，返回格式化文本与来源列表。"""
+    key = settings.bocha_api_key
+    if not key:
+        return "未配置博查搜索 API Key，无法搜索网页。", []
+    try:
+        resp = httpx.post(
+            "https://api.bochaai.com/v1/web-search",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"query": query, "count": 8, "summary": True},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        return f"网页搜索失败：{exc}", []
+    if data.get("code") != 200:
+        return f"网页搜索出错：{data.get('msg') or '未知错误'}", []
+    results = (((data.get("data") or {}).get("webPages")) or {}).get("value") or []
+    if not results:
+        return "未搜索到相关内容。", []
+    parts: list[str] = []
+    sources: list[str] = []
+    for i, item in enumerate(results, start=1):
+        title = item.get("name") or item.get("url") or "无标题"
+        url = item.get("url") or ""
+        summary = item.get("summary") or item.get("snippet") or ""
+        parts.append(f"[{i}] {title}\n{url}\n{summary}".strip())
+        sources.append(f"{title}（{url}）" if url else title)
+    return "\n\n".join(parts), sources
+
+
 # ---- 工具 schema（供 bind_tools）----
 
 
@@ -86,7 +152,19 @@ def get_current_time() -> str:
     return _time()
 
 
-TOOLS = [search_knowledge_base, calculator, get_current_time]
+@tool
+def get_weather(city: str = "") -> str:
+    """查询指定城市的实时天气。city 为城市名（如「西安」「北京」），用户未指定时传空串查默认城市。"""
+    return _weather(city)
+
+
+@tool
+def web_search(query: str) -> str:
+    """搜索网页获取最新/实时信息。query 为搜索关键词。"""
+    return _web_search(query)[0]
+
+
+TOOLS = [search_knowledge_base, calculator, get_current_time, get_weather, web_search]
 
 
 def run_tool(name: str, args: dict) -> tuple[str, list[str]]:
@@ -97,4 +175,8 @@ def run_tool(name: str, args: dict) -> tuple[str, list[str]]:
         return _calc(args.get("expression", "")), []
     if name == "get_current_time":
         return _time(), []
+    if name == "get_weather":
+        return _weather(args.get("city", "")), []
+    if name == "web_search":
+        return _web_search(args.get("query", ""))
     return f"未知工具：{name}", []

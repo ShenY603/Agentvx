@@ -1,19 +1,19 @@
 # 知识问答 Agent（企业微信智能机器人）实施方案
 
-> v3：纯 Python + LangGraph + RAG（pgvector + 本地 embedding）。从「生活问答」升级为「知识问答 agent」——用户 @机器人 提问，系统基于自建文档库检索并生成**带引用来源**的回答。
+> v3：纯 Python + LangGraph + RAG（pgvector + 本地 embedding）。企业微信「智能机器人」长连接接入，用户 @机器人 提问，agent 按需调用**知识库检索 / 网页搜索 / 天气 / 计算 / 时间**等工具，生成**带引用来源**的回答。
 
 > 踩坑记录（问题排查）见 [Problem.md](Problem.md)。
 
 ## 项目总结
 
-**一个跑通的企业微信知识问答 Agent（RAG）**：用户在企业微信里 @机器人 提问，系统基于自建文档库检索，用 DeepSeek 生成**带引用来源**的回答。
+**一个跑通的企业微信 Agent**：用户在企业微信里 @机器人 提问，LLM 按需调用**知识库检索 / 网页搜索 / 天气 / 计算 / 时间**等工具，用 DeepSeek 生成**带引用来源**的回答。
 
 - **技术栈**：Python · LangGraph · DeepSeek · PostgreSQL + pgvector · bge-small-zh-v1.5（本地 embedding）· Docker Compose · wecom-aibot-python-sdk（WebSocket 长连接）
 - **架构**：LangGraph agent 循环（LLM 决策调用工具 → 执行 → 再决策），`PostgresSaver` 持久化多轮状态（`thread_id` 按会话隔离）；`bot.py`（接入）/ `graph.py`（编排）/ `tools.py`（工具）/ `db.py`（落库）/ `embed.py`（向量化）模块解耦
-- **工程**：分 7 阶段推进、每阶段带可执行验证；踩坑沉淀在 [Problem.md](Problem.md)（22 条：企微长连接协议、Docker 镜像、HF 离线加载、DeepSeek base_url、pgvector 认证、时区、checkpoint 历史污染等）
+- **工程**：分 7 阶段推进、每阶段带可执行验证；踩坑沉淀在 [Problem.md](Problem.md)（23 条：企微长连接协议、Docker 镜像、HF 离线加载、DeepSeek base_url、pgvector 认证、时区、checkpoint 历史污染、天气城市歧义等）
 - **部署**：云服务器 Docker 两容器（pgvector + app）常驻运行，全流程端到端跑通
 
-**状态**：✅ 全部 7 阶段完成（Phase 0~6）
+**状态**：✅ 全部 7 阶段完成（Phase 0~6），已扩展 agent 工具（网页搜索 / 天气）
 
 ## Context（背景）
 
@@ -24,11 +24,11 @@
 - **生成模型**：DeepSeek API（OpenAI 兼容接口），经 `langchain-deepseek` 接入
 - **Embedding**：**本地 `BAAI/bge-small-zh-v1.5`**（DeepSeek 官方无 embedding 接口，故本地向量化；中文强、免费、离线）
 - **向量存储**：同一台 PG 上的 **`pgvector`** 扩展（不用另引独立向量库）
-- **编排框架**：LangGraph（agent 工具循环：LLM 决策调用 `search_knowledge_base` / `calculator` / `get_current_time`）
+- **编排框架**：LangGraph（agent 工具循环：LLM 决策调用 `search_knowledge_base` / `web_search` / `get_weather` / `calculator` / `get_current_time`）
 - **企微接入**：企业微信「智能机器人」→ API 接入 → **WebSocket 长连接模式**（无需备案域名/HTTPS）
 - **文档**：PDF / Word / Markdown / txt，约几十篇
 - **回答要求**：**附引用来源**
-- **服务器**：腾讯云 Ubuntu（`VM-0-8-ubuntu`），Docker + PostgreSQL 17（`postgres`，映射 `127.0.0.1:5432`，密码为空）
+- **服务器**：腾讯云 Ubuntu（`VM-0-8-ubuntu`），Docker Compose 两容器（`pgvector/pgvector:pg17` + app）；PG 容器内 trust 免密、不对外映射端口，本地开发经 SSH 隧道访问
 
 ## 可行性结论
 
@@ -51,7 +51,7 @@
 │                                                              │
 │  graph.py —— LangGraph agent 循环                              │
 │     agent 节点：LLM 决策（直接回答 / 调用工具）                     │
-│     tools 节点：search_knowledge_base / calculator / get_current_time │
+│     tools 节点：search_knowledge_base / web_search / get_weather 等  │
 │  tools.py —— 工具定义与执行                                     │
 │                                                              │
 │  embed.py —— 本地 bge-small-zh-v1.5 向量化                                 │
@@ -76,6 +76,8 @@
 | Embedding | `sentence-transformers` + `BAAI/bge-small-zh-v1.5` | 本地 512 维，中文强 |
 | 向量存储 | `langchain-postgres`（`PGVector`）+ `pgvector` 扩展 | 复用云 PG |
 | 状态持久化 | `langgraph-checkpoint-postgres`（`PostgresSaver`） | 多轮上下文存 PG |
+| 天气查询 | 高德天气 API | `httpx` 直连，`extensions=base` 实时天气 |
+| 网页搜索 | 博查 BoCha Web Search API | `httpx` POST + Bearer 认证 |
 | 文档解析 | `pymupdf`（PDF）/ `docx2txt`（Word）/ 内建（md、txt） | 直接调用，轻量 |
 | 业务日志/排重 | `psycopg[binary]` | 直接读写 `messages` / `request_log` |
 | 配置 | `pydantic-settings` + `python-dotenv` | 读环境变量 |
@@ -111,7 +113,7 @@ life-assistant/
 │   ├── vector_store.py         # PGVector 封装：写入 / 相似检索
 │   ├── ingest.py               # 离线摄入脚本：解析 → 分块 → embed → 入库
 │   ├── llm.py                  # ChatDeepSeek（Phase 3）
-│   ├── tools.py                # 工具：search_knowledge_base / calculator / get_current_time
+│   ├── tools.py                # 工具：检索 / 网页 / 天气 / 计算 / 时间
 │   ├── state.py                # GraphState 类型定义（Phase 3）
 │   ├── graph.py                # LangGraph agent 循环（Phase 3）
 │   ├── db.py                   # psycopg：messages/request_log + 排重（Phase 3）
@@ -174,22 +176,23 @@ CREATE TABLE IF NOT EXISTS request_log (
 - **State**：`messages`（`add_messages` 累积历史，含工具调用/结果）+ `sources`（引用来源，检索时回填）。
 - **节点**：
   - `agent`：`ChatDeepSeek.bind_tools(TOOLS)` 决策——直接回答，或返回工具调用；新一轮用户提问时清空 `sources`。
-  - `tools`：执行被调用的工具，把 `search_knowledge_base` 命中的来源追加进 `sources`。
+  - `tools`：执行被调用的工具，把 `search_knowledge_base` / `web_search` 命中的来源追加进 `sources`。
 - **边**：`START → agent`；`agent` 按「有无 tool_calls」条件分支到 `tools` 或 `END`；`tools → agent`（循环）。
-- **工具**（`tools.py`）：`search_knowledge_base`（检索知识库）/ `calculator`（安全四则运算）/ `get_current_time`（北京时间）。
+- **工具**（`tools.py`）：`search_knowledge_base`（检索知识库）/ `web_search`（博查网页搜索）/ `get_weather`（高德天气）/ `calculator`（安全四则运算）/ `get_current_time`（北京时间）。
 - **checkpointer**：`PostgresSaver`，`thread_id = chatid or userid`。
-- **提示词**：知识类问题必须先检索、计算/时间必须调工具、禁止复述历史里的旧答案；检索无内容时回答「资料中没有相关内容」。
+- **提示词**：知识类先检索、实时信息先搜索网页、天气/计算/时间必须调工具、禁止复述历史里的旧答案；检索无内容时回答「资料中没有相关内容」。
 
 ### 5. 检索与引用来源
 
-- 提示词要求：知识类问题先检索再作答、句末用 `[1][2]` 标注出处；资料不足时回答「资料中没有相关内容」。
+- 提示词要求：知识类先检索、实时信息先搜索网页，作答时句末用 `[1][2]` 标注出处；资料不足时回答「资料中没有相关内容」。
+- 来源回填：知识库命中回填「文件名 + 页码」，网页搜索回填「标题（URL）」，统一拼进回复末尾的「来源」列表。
 - 回复格式（企微文本）：
   ```
   <回答正文>……[1][2]
 
   来源：
   1. 《xxx.pdf》第 3 页
-  2. 《yyy.md》
+  2. 某新闻标题（https://…）
   ```
 
 ### 6. DeepSeek 调用（`llm.py`）
@@ -202,6 +205,12 @@ CREATE TABLE IF NOT EXISTS request_log (
 - 配置：`BOT_ID`、`BOT_SECRET`。
 - 流程：SDK 建立长连接鉴权 → 收 `text` 消息（群聊先判断是否 @机器人）→ `msgid` 排重 → 写 `role='user'` → `graph.invoke`（经 `asyncio.to_thread` 跑同步调用，避免阻塞事件循环）→ 写 `role='assistant'` + `request_log` → SDK 回复。
 - 异常兜底：失败回复固定文案「抱歉，暂时没查到相关资料～」，写 `request_log.status='error'`。
+
+### 8. 外部工具：天气 / 网页搜索（`tools.py`）
+
+- **天气 `get_weather`**：调高德 `weatherInfo`（`extensions=base` 实时天气），需要 `AMAP_API_KEY`；用户未指定城市时用 `DEFAULT_CITY`（默认「西安」）。城市名模糊匹配可能返回同名区县，代码已优先取「市级」结果。
+- **网页搜索 `web_search`**：调博查 `web-search`（Bearer 认证、`summary=true`），需要 `BOCHA_API_KEY`；返回 top-8 结果并把「标题（URL）」回填到来源。
+- 两者都用 `httpx`（无新增依赖），调用失败/未配 key 时返回提示文本，不抛异常、不影响其它工具。
 
 ## 企微接入步骤（前置条件，需用户操作）
 
