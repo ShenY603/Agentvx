@@ -114,3 +114,20 @@
 - **现象**：检索 top-k 里多个 chunk 来自同一文件，来源列表重复列出该文件。
 - **根因**：`_extract_sources` 未去重。
 - **解决**：来源列表去重（用 set 记录已出现过的 source）。
+
+## 十、agent 工具循环（v2）与部署
+
+### 20. `get_current_time` 返回 UTC 时间（比北京时间少 8 小时）
+- **现象**：问「现在几点」返回的时间比北京时间少约 8 小时（如北京时间 17:01 返回 08:53）。
+- **根因**：早期 `_time()` 没转北京时间，直接返回了 UTC/容器本地时间（容器日志时间戳即 `+00:00` UTC）。
+- **解决**：`_CHINA_TZ = timezone(timedelta(hours=8))`，`_time()` 用 `datetime.now(_CHINA_TZ).strftime(...)`。固定 +8 偏移、与容器/服务器时区无关，一定返回北京时间。
+
+### 21. `docker compose build` 后线上代码没变化
+- **现象**：改了 `app/` 里的代码、`docker compose build` 完，线上行为还是旧的。
+- **根因**：`app/` 是 Dockerfile `COPY` 打进镜像的；`build` 只重建镜像，**不会替换正在跑的容器**，旧容器仍跑旧代码。
+- **解决**：用 `docker compose up -d --build`（重建镜像 + 用新镜像重建容器）。排查「改了没生效」时先看 `docker compose ps` 的 `Up X minutes` 是否晚于改代码时间。
+
+### 22. 持久线程历史被污染，LLM 复读旧答案
+- **现象**：修完代码后，企微里提问仍返回旧的错误答案（如「现在几点」两次返回分秒不差的同一个旧时间戳，隔 39 分钟原样重现）。
+- **根因**：`thread_id=userid` 持久化多轮历史（`PostgresSaver`）；旧代码的错误回答留在历史里，LLM 看到后逐字复读、不再重新调工具。新线程直接 `graph.invoke` 结果正确、企微线程结果错误，即说明代码没问题、问题在历史。
+- **解决**：清空该线程的 checkpoint 表（`checkpoints` / `checkpoint_blobs` / `checkpoint_writes` 中 `thread_id='<userid>'` 的记录，清完不用重启）；并在 system prompt 加「每次必须重新调用工具、禁止复述历史旧答案/旧时间」。

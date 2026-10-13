@@ -10,7 +10,7 @@
 
 - **技术栈**：Python · LangGraph · DeepSeek · PostgreSQL + pgvector · bge-small-zh-v1.5（本地 embedding）· Docker Compose · wecom-aibot-python-sdk（WebSocket 长连接）
 - **架构**：LangGraph 编排 `retrieve → generate`，`PostgresSaver` 持久化多轮状态（`thread_id` 按会话隔离）；`bot.py`（接入）/ `graph.py`（编排）/ `db.py`（落库）/ `embed.py`（向量化）模块解耦
-- **工程**：分 7 阶段推进、每阶段带可执行验证；踩坑沉淀在 [Problem.md](Problem.md)（19 条：企微长连接协议、Docker 镜像、HF 离线加载、DeepSeek base_url、pgvector 认证等）
+- **工程**：分 7 阶段推进、每阶段带可执行验证；踩坑沉淀在 [Problem.md](Problem.md)（22 条：企微长连接协议、Docker 镜像、HF 离线加载、DeepSeek base_url、pgvector 认证、时区、checkpoint 历史污染等）
 - **部署**：云服务器 Docker 两容器（pgvector + app）常驻运行，全流程端到端跑通
 
 **状态**：✅ 全部 7 阶段完成（Phase 0~6）
